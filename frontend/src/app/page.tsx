@@ -1,9 +1,10 @@
 "use client";
 
 import type { FormEvent, InputHTMLAttributes, ReactNode } from "react";
-import { useReducer, useMemo, useState, useCallback } from "react";
+import { useReducer, useMemo, useState, useCallback, useEffect } from "react";
 import Header from "./components/Header";
 import Footer from "./components/Footer";
+import * as api from "@/lib/api";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -71,31 +72,6 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
   }
 }
 
-// ─── Mock auth service ────────────────────────────────────────────────────────
-
-const MOCK_USERS: Record<string, { password: string; name: string }> = {};
-
-function mockLogin(email: string, password: string): { token: string; name: string } | null {
-  const user = MOCK_USERS[email.toLowerCase()];
-  if (!user || user.password !== password) return null;
-  return { token: btoa(`${email}:${Date.now()}`), name: user.name };
-}
-
-function mockRegister(name: string, email: string, password: string): boolean {
-  const key = email.toLowerCase();
-  if (MOCK_USERS[key]) return false;
-  MOCK_USERS[key] = { password, name };
-  return true;
-}
-
-// ─── Seed data ────────────────────────────────────────────────────────────────
-
-const seedTodos: Todo[] = [
-  { id: 1, title: "Design the onboarding flow", description: "Map out the registration, login, and logout experience.", priority: "High", completed: false, createdAt: "Today" },
-  { id: 2, title: "Build protected task routes", description: "Keep unauthenticated users out of the todo dashboard.", priority: "Medium", completed: true, createdAt: "Yesterday" },
-  { id: 3, title: "Refine empty states", description: "Show helpful guidance when there are no active todos.", priority: "Low", completed: false, createdAt: "2 days ago" },
-];
-
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function Home() {
@@ -106,11 +82,34 @@ export default function Home() {
 
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<TodoStatus>("all");
-  const [nextId, setNextId] = useState(4);
-  const [todos, setTodos] = useState<Todo[]>(seedTodos);
+  const [todos, setTodos] = useState<Todo[]>([]);
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
   const [todoForm, setTodoForm] = useState({ title: "", description: "", priority: "Medium" as Priority });
   const [todoErrors, setTodoErrors] = useState<Record<string, string>>({});
+
+  const loadTodos = useCallback(async (token: string) => {
+    try {
+      const data = await api.fetchTodos(token);
+      setTodos(data);
+    } catch {
+      setTodos([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    const token = typeof sessionStorage !== "undefined" ? sessionStorage.getItem("auth_token") : null;
+    if (!token) return;
+
+    (async () => {
+      try {
+        const user = await api.getCurrentUser(token);
+        dispatch({ type: "LOGIN_SUCCESS", token, username: user.name });
+        await loadTodos(token);
+      } catch {
+        sessionStorage.removeItem("auth_token");
+      }
+    })();
+  }, [loadTodos]);
 
   const stats = useMemo(() => {
     const completed = todos.filter((t) => t.completed).length;
@@ -132,38 +131,84 @@ export default function Home() {
     const errors = validateAuth(authMode, fields);
     if (Object.keys(errors).length) return errors;
     dispatch({ type: "LOGIN_START" });
-    await new Promise((r) => setTimeout(r, 600));
-    if (authMode === "register") {
-      const ok = mockRegister(fields.name!, fields.email, fields.password);
-      if (!ok) { dispatch({ type: "LOGIN_ERROR", error: "An account with that email already exists." }); return {}; }
-    }
-    const result = mockLogin(fields.email, fields.password);
-    if (!result) { dispatch({ type: "LOGIN_ERROR", error: authMode === "login" ? "Invalid email or password." : "Registration failed. Please try again." }); return {}; }
-    if (typeof sessionStorage !== "undefined") sessionStorage.setItem("auth_token", result.token);
-    dispatch({ type: "LOGIN_SUCCESS", token: result.token, username: result.name });
-    return {};
-  }, [authMode]);
+    try {
+      const result = authMode === "register"
+        ? await api.register(fields.name!, fields.email, fields.password)
+        : await api.login(fields.email, fields.password);
 
-  const handleCreateTodo = (event: FormEvent<HTMLFormElement>) => {
+      if (typeof sessionStorage !== "undefined") sessionStorage.setItem("auth_token", result.token);
+      dispatch({ type: "LOGIN_SUCCESS", token: result.token, username: result.user.name });
+      await loadTodos(result.token);
+    } catch (error) {
+      const message = error instanceof api.ApiError
+        ? error.message
+        : authMode === "login" ? "Invalid email or password." : "Registration failed. Please try again.";
+      dispatch({ type: "LOGIN_ERROR", error: message });
+    }
+    return {};
+  }, [authMode, loadTodos]);
+
+  const handleLogout = useCallback(async () => {
+    if (auth.token) {
+      try { await api.logout(auth.token); } catch { /* ignore */ }
+    }
+    dispatch({ type: "LOGOUT" });
+    setTodos([]);
+  }, [auth.token]);
+
+  const handleCreateTodo = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const errors = validateTodo(todoForm.title);
     if (Object.keys(errors).length) { setTodoErrors(errors); return; }
-    setTodos((c) => [{ id: nextId, title: todoForm.title.trim(), description: todoForm.description.trim(), priority: todoForm.priority, completed: false, createdAt: "Just now" }, ...c]);
-    setNextId((c) => c + 1);
-    setTodoForm({ title: "", description: "", priority: "Medium" });
-    setTodoErrors({});
+    if (!auth.token) return;
+
+    try {
+      const created = await api.createTodo(auth.token, {
+        title: todoForm.title.trim(),
+        description: todoForm.description.trim(),
+        priority: todoForm.priority,
+      });
+      setTodos((current) => [created, ...current]);
+      setTodoForm({ title: "", description: "", priority: "Medium" });
+      setTodoErrors({});
+    } catch {
+      setTodoErrors({ title: "Failed to create todo. Please try again." });
+    }
   };
 
-  const updateTodo = (id: number, changes: Partial<Todo>) =>
-    setTodos((c) => c.map((t) => (t.id === id ? { ...t, ...changes } : t)));
+  const updateTodo = async (id: number, changes: Partial<Todo>) => {
+    if (!auth.token) return;
+    try {
+      const updated = await api.updateTodo(auth.token, id, changes);
+      setTodos((current) => current.map((todo) => (todo.id === id ? updated : todo)));
+    } catch { /* ignore */ }
+  };
 
-  const deleteTodo = (id: number) => setTodos((c) => c.filter((t) => t.id !== id));
+  const deleteTodo = async (id: number) => {
+    if (!auth.token) return;
+    try {
+      await api.deleteTodo(auth.token, id);
+      setTodos((current) => current.filter((todo) => todo.id !== id));
+    } catch { /* ignore */ }
+  };
 
-  const handleSaveEdit = (updated: Todo) => {
+  const handleSaveEdit = async (updated: Todo) => {
     const errors = validateTodo(updated.title);
     if (Object.keys(errors).length) return errors;
-    updateTodo(updated.id, updated);
-    setEditingTodo(null);
+    if (!auth.token) return errors;
+
+    try {
+      const saved = await api.updateTodo(auth.token, updated.id, {
+        title: updated.title,
+        description: updated.description,
+        priority: updated.priority,
+        completed: updated.completed,
+      });
+      setTodos((current) => current.map((todo) => (todo.id === saved.id ? saved : todo)));
+      setEditingTodo(null);
+    } catch {
+      return { title: "Failed to save changes. Please try again." };
+    }
     return {};
   };
 
@@ -173,7 +218,7 @@ export default function Home() {
       <Header
         isAuthenticated={auth.isAuthenticated}
         username={auth.username}
-        onLogout={() => dispatch({ type: "LOGOUT" })}
+        onLogout={handleLogout}
       />
 
       <main className="flex-1">
@@ -230,7 +275,7 @@ export default function Home() {
                 onToggle={(id, completed) => updateTodo(id, { completed })}
                 onEdit={setEditingTodo}
                 onDelete={deleteTodo}
-                onLogout={() => dispatch({ type: "LOGOUT" })}
+                onLogout={handleLogout}
               />
             )}
           </div>
