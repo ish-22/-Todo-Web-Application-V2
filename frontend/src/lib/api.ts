@@ -1,6 +1,13 @@
 import type { Todo } from "@/types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
+function getApiUrl() {
+  // Prefer explicit env var (injected at build/runtime). Fallback to a runtime
+  // decision so client-side code calls the same origin when appropriate.
+  const env = process.env.NEXT_PUBLIC_API_URL;
+  if (env && env.length) return env.replace(/\/$/, "");
+  if (typeof window !== "undefined") return `${window.location.origin}/api`;
+  return "http://localhost:8000/api";
+}
 
 export type TodoFilters = {
   search?: string;
@@ -29,7 +36,8 @@ async function request<T>(
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 
-  const response = await fetch(`${API_URL}${path}`, {
+  const base = getApiUrl();
+  const response = await fetch(`${base}${path}`, {
     ...options,
     headers: { ...headers, ...(options.headers as Record<string, string>) },
   });

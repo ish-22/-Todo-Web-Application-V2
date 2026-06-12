@@ -1,41 +1,23 @@
 "use client";
 
 import type { FormEvent, InputHTMLAttributes, ReactNode } from "react";
-import { useReducer, useMemo, useState, useCallback, useDeferredValue } from "react";
+import { useReducer, useMemo, useState, useCallback, useEffect } from "react";
 import Header from "./components/Header";
 import Footer from "./components/Footer";
+import { authReducer, initialAuthState } from "@/lib/auth";
+import {
+  login as apiLogin,
+  register as apiRegister,
+  logout as apiLogout,
+  fetchTodos,
+  createTodo,
+  updateTodo,
+  deleteTodo,
+  ApiError,
+} from "@/lib/api";
+import type { Todo, AuthMode, TodoStatus, Priority } from "@/types";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-type AuthMode = "login" | "register";
-type TodoStatus = "all" | "pending" | "completed";
-type Priority = "Low" | "Medium" | "High";
-
-interface Todo {
-  id: number;
-  title: string;
-  description: string;
-  priority: Priority;
-  completed: boolean;
-  createdAt: string;
-}
-
-interface AuthState {
-  isAuthenticated: boolean;
-  token: string | null;
-  username: string | null;
-  error: string | null;
-  isLoading: boolean;
-}
-
-type AuthAction =
-  | { type: "LOGIN_START" }
-  | { type: "LOGIN_SUCCESS"; token: string; username: string }
-  | { type: "LOGIN_ERROR"; error: string }
-  | { type: "LOGOUT" }
-  | { type: "CLEAR_ERROR" };
-
-// ─── Validation ───────────────────────────────────────────────────────────────
+// ─── Validation ────────────────────────────────────────────────────────────────
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -56,69 +38,44 @@ function validateTodo(title: string): Record<string, string> {
   return errors;
 }
 
-// ─── Auth reducer ─────────────────────────────────────────────────────────────
-
-function authReducer(state: AuthState, action: AuthAction): AuthState {
-  switch (action.type) {
-    case "LOGIN_START":   return { ...state, isLoading: true, error: null };
-    case "LOGIN_SUCCESS": return { isAuthenticated: true, token: action.token, username: action.username, error: null, isLoading: false };
-    case "LOGIN_ERROR":   return { ...state, isLoading: false, error: action.error };
-    case "LOGOUT":
-      if (typeof sessionStorage !== "undefined") sessionStorage.removeItem("auth_token");
-      return { isAuthenticated: false, token: null, username: null, error: null, isLoading: false };
-    case "CLEAR_ERROR":   return { ...state, error: null };
-    default:              return state;
-  }
-}
-
-// ─── Mock auth service ────────────────────────────────────────────────────────
-
-const MOCK_USERS: Record<string, { password: string; name: string }> = {};
-
-function mockLogin(email: string, password: string): { token: string; name: string } | null {
-  const user = MOCK_USERS[email.toLowerCase()];
-  if (!user || user.password !== password) return null;
-  return { token: btoa(`${email}:${Date.now()}`), name: user.name };
-}
-
-function mockRegister(name: string, email: string, password: string): boolean {
-  const key = email.toLowerCase();
-  if (MOCK_USERS[key]) return false;
-  MOCK_USERS[key] = { password, name };
-  return true;
-}
-
-// ─── Seed data ────────────────────────────────────────────────────────────────
-
-const seedTodos: Todo[] = [
-  { id: 1, title: "Design the onboarding flow", description: "Map out the registration, login, and logout experience.", priority: "High", completed: false, createdAt: "Today" },
-  { id: 2, title: "Build protected task routes", description: "Keep unauthenticated users out of the todo dashboard.", priority: "Medium", completed: true, createdAt: "Yesterday" },
-  { id: 3, title: "Refine empty states", description: "Show helpful guidance when there are no active todos.", priority: "Low", completed: false, createdAt: "2 days ago" },
-];
-
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function Home() {
   const [authMode, setAuthMode] = useState<AuthMode>("login");
-  const [auth, dispatch] = useReducer(authReducer, {
-    isAuthenticated: false, token: null, username: null, error: null, isLoading: false,
-  });
+  const [auth, dispatch] = useReducer(authReducer, initialAuthState);
 
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<TodoStatus>("all");
-  const [nextId, setNextId] = useState(4);
-  const [todos, setTodos] = useState<Todo[]>(seedTodos);
+  const [priorityFilter, setPriorityFilter] = useState<Todo["priority"] | "all">("all");
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [todosLoading, setTodosLoading] = useState(false);
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
   const [todoForm, setTodoForm] = useState({ title: "", description: "", priority: "Medium" as Priority });
   const [todoErrors, setTodoErrors] = useState<Record<string, string>>({});
-  const deferredQuery = useDeferredValue(query);
+
+  // Restore token from sessionStorage on mount
+  useEffect(() => {
+    const token = sessionStorage.getItem("auth_token");
+    const username = sessionStorage.getItem("auth_username");
+    if (token && username) {
+      dispatch({ type: "LOGIN_SUCCESS", token, username });
+    }
+  }, []);
+
+  // Load todos whenever auth token changes
+  useEffect(() => {
+    if (!auth.token) { setTodos([]); return; }
+    setTodosLoading(true);
+    fetchTodos(auth.token, { search: query, status: filter, priority: priorityFilter })
+      .then(setTodos)
+      .catch(() => setTodos([]))
+      .finally(() => setTodosLoading(false));
+  }, [auth.token, query, filter, priorityFilter]);
 
   const stats = useMemo(() => {
     const completed = todos.filter((t) => t.completed).length;
     return { total: todos.length, completed, pending: todos.length - completed };
   }, [todos]);
-
-  const visibleTodos = todos;
 
   const handleAuthSubmit = useCallback(async (
     event: FormEvent<HTMLFormElement>,
@@ -128,76 +85,155 @@ export default function Home() {
     const errors = validateAuth(authMode, fields);
     if (Object.keys(errors).length) return errors;
     dispatch({ type: "LOGIN_START" });
-    await new Promise((r) => setTimeout(r, 600));
-    if (authMode === "register") {
-      const ok = mockRegister(fields.name!, fields.email, fields.password);
-      if (!ok) { dispatch({ type: "LOGIN_ERROR", error: "An account with that email already exists." }); return {}; }
+    try {
+      let result;
+      if (authMode === "register") {
+        result = await apiRegister(fields.name!, fields.email, fields.password);
+      } else {
+        result = await apiLogin(fields.email, fields.password);
+      }
+      sessionStorage.setItem("auth_token", result.token);
+      sessionStorage.setItem("auth_username", result.user.name);
+      dispatch({ type: "LOGIN_SUCCESS", token: result.token, username: result.user.name });
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "Something went wrong.";
+      dispatch({ type: "LOGIN_ERROR", error: msg });
     }
-    const result = mockLogin(fields.email, fields.password);
-    if (!result) { dispatch({ type: "LOGIN_ERROR", error: authMode === "login" ? "Invalid email or password." : "Registration failed. Please try again." }); return {}; }
-    if (typeof sessionStorage !== "undefined") sessionStorage.setItem("auth_token", result.token);
-    dispatch({ type: "LOGIN_SUCCESS", token: result.token, username: result.name });
     return {};
   }, [authMode]);
 
-  const handleCreateTodo = (event: FormEvent<HTMLFormElement>) => {
+  const handleLogout = useCallback(async () => {
+    if (auth.token) {
+      try { await apiLogout(auth.token); } catch { /* ignore */ }
+    }
+    sessionStorage.removeItem("auth_token");
+    sessionStorage.removeItem("auth_username");
+    dispatch({ type: "LOGOUT" });
+  }, [auth.token]);
+
+  const handleCreateTodo = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const errors = validateTodo(todoForm.title);
     if (Object.keys(errors).length) { setTodoErrors(errors); return; }
-    setTodos((c) => [{ id: nextId, title: todoForm.title.trim(), description: todoForm.description.trim(), priority: todoForm.priority, completed: false, createdAt: "Just now" }, ...c]);
-    setNextId((c) => c + 1);
-    setTodoForm({ title: "", description: "", priority: "Medium" });
-    setTodoErrors({});
+    if (!auth.token) return;
+    try {
+      const newTodo = await createTodo(auth.token, {
+        title: todoForm.title.trim(),
+        description: todoForm.description.trim(),
+        priority: todoForm.priority,
+      });
+      setTodos((c) => [newTodo, ...c]);
+      setTodoForm({ title: "", description: "", priority: "Medium" });
+      setTodoErrors({});
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "Failed to create todo.";
+      setTodoErrors({ title: msg });
+    }
   };
 
-  const updateTodo = (id: number, changes: Partial<Todo>) =>
-    setTodos((c) => c.map((t) => (t.id === id ? { ...t, ...changes } : t)));
+  const handleToggle = async (id: number, completed: boolean) => {
+    if (!auth.token) return;
+    try {
+      const updated = await updateTodo(auth.token, id, { completed });
+      setTodos((c) => c.map((t) => (t.id === id ? updated : t)));
+    } catch { /* ignore */ }
+  };
 
-  const deleteTodo = (id: number) => setTodos((c) => c.filter((t) => t.id !== id));
+  const handleDelete = async (id: number) => {
+    if (!auth.token) return;
+    try {
+      await deleteTodo(auth.token, id);
+      setTodos((c) => c.filter((t) => t.id !== id));
+    } catch { /* ignore */ }
+  };
 
-  const handleSaveEdit = (updated: Todo) => {
+  const handleSaveEdit = async (updated: Todo): Promise<Record<string, string>> => {
     const errors = validateTodo(updated.title);
     if (Object.keys(errors).length) return errors;
-    updateTodo(updated.id, updated);
-    setEditingTodo(null);
+    if (!auth.token) return {};
+    try {
+      const saved = await updateTodo(auth.token, updated.id, {
+        title: updated.title,
+        description: updated.description,
+        priority: updated.priority,
+        completed: updated.completed,
+      });
+      setTodos((c) => c.map((t) => (t.id === updated.id ? saved : t)));
+      setEditingTodo(null);
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "Failed to update todo.";
+      return { title: msg };
+    }
     return {};
   };
 
   return (
     <div className="flex min-h-screen flex-col transition-colors duration-200" style={{ background: "var(--gradient)" }}>
-
       <Header
         isAuthenticated={auth.isAuthenticated}
         username={auth.username}
-        onLogout={() => dispatch({ type: "LOGOUT" })}
+        onLogout={handleLogout}
       />
 
       <main className="flex-1">
         <section className="mx-auto flex w-full max-w-7xl flex-col gap-10 px-6 py-8 lg:px-10">
 
-          {/* Hero — #dashboard anchor */}
-          <div id="dashboard" className="flex flex-col gap-4 rounded-[2rem] p-6 shadow-xl backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between"
-            style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}>
-            <div className="space-y-1">
-              <span className="inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.28em]"
-                style={{ borderColor: "color-mix(in srgb, var(--accent) 30%, transparent)", background: "color-mix(in srgb, var(--accent) 10%, transparent)", color: "var(--accent)" }}>
-                TaskFlow
-              </span>
-              <h1 className="text-2xl font-semibold tracking-tight md:text-4xl" style={{ color: "var(--text-primary)" }}>
-                TaskFlow — Your tasks, under control.
-              </h1>
-              <p className="text-sm leading-6" style={{ color: "var(--text-secondary)" }}>
-                Secure authentication, smart task management, and a clean responsive interface — all in one place.
-              </p>
+          {/* Hero */}
+          {auth.isAuthenticated ? (
+            <div id="dashboard" className="flex flex-col gap-4 rounded-[2rem] p-6 shadow-xl backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between"
+              style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}>
+              <div className="space-y-1">
+                <span className="inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.28em]"
+                  style={{ borderColor: "color-mix(in srgb, var(--accent) 30%, transparent)", background: "color-mix(in srgb, var(--accent) 10%, transparent)", color: "var(--accent)" }}>
+                  TaskFlow
+                </span>
+                <h1 className="text-2xl font-semibold tracking-tight md:text-4xl" style={{ color: "var(--text-primary)" }}>
+                  Welcome back, {auth.username}!
+                </h1>
+                <p className="text-sm leading-6" style={{ color: "var(--text-secondary)" }}>
+                  Here's a snapshot of your tasks today.
+                </p>
+              </div>
+              <div className="grid shrink-0 grid-cols-3 gap-3 text-center">
+                <StatCard label="Tasks" value={stats.total} />
+                <StatCard label="Done" value={stats.completed} />
+                <StatCard label="Pending" value={stats.pending} />
+              </div>
             </div>
-            <div className="grid shrink-0 grid-cols-3 gap-3 text-center">
-              <StatCard label="Tasks" value={stats.total} />
-              <StatCard label="Done" value={stats.completed} />
-              <StatCard label="Pending" value={stats.pending} />
+          ) : (
+            <div id="dashboard" className="rounded-[2rem] p-8 shadow-xl backdrop-blur-xl"
+              style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}>
+              <div className="mb-6 space-y-2">
+                <span className="inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.28em]"
+                  style={{ borderColor: "color-mix(in srgb, var(--accent) 30%, transparent)", background: "color-mix(in srgb, var(--accent) 10%, transparent)", color: "var(--accent)" }}>
+                  TaskFlow
+                </span>
+                <h1 className="text-2xl font-semibold tracking-tight md:text-4xl" style={{ color: "var(--text-primary)" }}>
+                  Stay organised, stay ahead.
+                </h1>
+                <p className="text-sm leading-6" style={{ color: "var(--text-secondary)" }}>
+                  A simple, fast task manager built for getting things done.
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {([
+                  { icon: "📝", title: "Create tasks", desc: "Add todos with title, description and priority in seconds." },
+                  { icon: "✅", title: "Track progress", desc: "Mark tasks complete and watch your progress grow." },
+                  { icon: "🔍", title: "Search & filter", desc: "Find any task instantly by keyword, status or priority." },
+                  { icon: "📊", title: "Analytics", desc: "See your completion rate and task breakdown at a glance." },
+                ] as const).map(({ icon, title, desc }) => (
+                  <div key={title} className="rounded-2xl p-4"
+                    style={{ background: "var(--bg-surface)", border: "1px solid var(--border)" }}>
+                    <div className="mb-2 text-2xl">{icon}</div>
+                    <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{title}</p>
+                    <p className="mt-1 text-xs leading-5" style={{ color: "var(--text-muted)" }}>{desc}</p>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
-          {/* My Tasks — #my-tasks anchor */}
+          {/* My Tasks */}
           <div id="my-tasks">
             {!auth.isAuthenticated ? (
               <AuthSection
@@ -210,28 +246,29 @@ export default function Home() {
             ) : (
               <DashboardSection
                 username={auth.username!}
-                todos={visibleTodos}
-                totalCount={todos.length}
+                todos={todos}
+                isLoading={todosLoading}
                 query={query}
                 filter={filter}
+                priorityFilter={priorityFilter}
                 todoForm={todoForm}
                 todoErrors={todoErrors}
                 onQueryChange={setQuery}
                 onFilterChange={setFilter}
+                onPriorityFilterChange={setPriorityFilter}
                 onTodoFormChange={(field, value) => {
                   setTodoForm((c) => ({ ...c, [field]: value }));
                   if (todoErrors[field]) setTodoErrors((c) => { const n = { ...c }; delete n[field]; return n; });
                 }}
                 onCreateTodo={handleCreateTodo}
-                onToggle={(id, completed) => updateTodo(id, { completed })}
+                onToggle={handleToggle}
                 onEdit={setEditingTodo}
-                onDelete={deleteTodo}
-                onLogout={() => dispatch({ type: "LOGOUT" })}
+                onDelete={handleDelete}
+                onLogout={handleLogout}
               />
             )}
           </div>
 
-          {/* Analytics — #analytics anchor */}
           {auth.isAuthenticated && <AnalyticsSection todos={todos} />}
 
         </section>
@@ -267,7 +304,6 @@ function AnalyticsSection({ todos }: { todos: Todo[] }) {
       <h2 className="mb-6 text-2xl font-semibold" style={{ color: "var(--text-primary)" }}>Analytics</h2>
 
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        {/* Completion ring */}
         <div className="flex flex-col items-center justify-center rounded-2xl p-5 text-center"
           style={{ background: "var(--bg-surface)", border: "1px solid var(--border)" }}>
           <svg viewBox="0 0 36 36" className="h-20 w-20 -rotate-90">
@@ -334,10 +370,7 @@ function AuthSection({ mode, onModeChange, onSubmit, serverError, isLoading }: {
     if (Object.keys(fieldErrors).length) { e.preventDefault(); setErrors(fieldErrors); return; }
     const serverErrors = await onSubmit(e, fields);
     if (Object.keys(serverErrors).length) setErrors(serverErrors);
-    else {
-      setFields({ name: "", email: "", password: "" });
-      setShowPassword(false);
-    }
+    else { setFields({ name: "", email: "", password: "" }); setShowPassword(false); }
   };
 
   return (
@@ -378,7 +411,7 @@ function AuthSection({ mode, onModeChange, onSubmit, serverError, isLoading }: {
             rightElement={(
               <button
                 type="button"
-                onClick={() => setShowPassword((current) => !current)}
+                onClick={() => setShowPassword((c) => !c)}
                 className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-2 transition hover:opacity-80"
                 style={{ background: "color-mix(in srgb, var(--text-primary) 6%, transparent)", color: "var(--text-muted)" }}
                 aria-label={showPassword ? "Hide password" : "Show password"}
@@ -398,18 +431,18 @@ function AuthSection({ mode, onModeChange, onSubmit, serverError, isLoading }: {
       </div>
 
       <aside className="rounded-[2rem] p-8 shadow-2xl" style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}>
-        <h2 className="text-xl font-semibold" style={{ color: "var(--text-primary)" }}>What this frontend includes</h2>
+        <h2 className="text-xl font-semibold" style={{ color: "var(--text-primary)" }}>Why TaskFlow?</h2>
         <ul className="mt-5 space-y-4 text-sm leading-6" style={{ color: "var(--text-secondary)" }}>
-          <li>Registration and login with client-side and server-level validation.</li>
-          <li>Secure token stored in <code className="rounded px-1" style={{ background: "color-mix(in srgb, var(--text-primary) 10%, transparent)" }}>sessionStorage</code> (cleared on tab close).</li>
-          <li>A protected dashboard that requires authentication.</li>
-          <li>Create, edit, delete, and complete todos with inline validation.</li>
-          <li>Search and filter controls for quick task organisation.</li>
-          <li>Light and dark mode with system preference detection.</li>
+          <li>📝 Add tasks with a title, description, and priority — keep every detail in one place.</li>
+          <li>✅ Mark tasks complete or pending with a single click, and track progress at a glance.</li>
+          <li>🔍 Search by keyword and filter by status or priority to find exactly what you need.</li>
+          <li>📊 Built-in analytics show your completion rate and task breakdown by priority.</li>
+          <li>🌙 Automatically adapts to your system's light or dark mode preference.</li>
+          <li>🔒 Your tasks are private — sign in to access your personal workspace.</li>
         </ul>
         <div className="mt-8 rounded-3xl p-5 text-sm"
           style={{ border: "1px solid color-mix(in srgb, var(--accent) 20%, transparent)", background: "color-mix(in srgb, var(--accent) 10%, transparent)", color: "var(--accent)" }}>
-          Built for a smooth candidate demo with secure sign-in, task tracking, and a polished responsive experience.
+          Sign up for free and start organising your day in seconds.
         </div>
       </aside>
     </section>
@@ -418,10 +451,10 @@ function AuthSection({ mode, onModeChange, onSubmit, serverError, isLoading }: {
 
 // ─── Dashboard section ────────────────────────────────────────────────────────
 
-function DashboardSection({ username, todos, totalCount, query, filter, todoForm, todoErrors, onQueryChange, onFilterChange, onTodoFormChange, onCreateTodo, onToggle, onEdit, onDelete, onLogout }: {
-  username: string; todos: Todo[]; totalCount: number; query: string; filter: TodoStatus;
+function DashboardSection({ username, todos, isLoading, query, filter, priorityFilter, todoForm, todoErrors, onQueryChange, onFilterChange, onPriorityFilterChange, onTodoFormChange, onCreateTodo, onToggle, onEdit, onDelete, onLogout }: {
+  username: string; todos: Todo[]; isLoading: boolean; query: string; filter: TodoStatus; priorityFilter: Todo["priority"] | "all";
   todoForm: { title: string; description: string; priority: Priority }; todoErrors: Record<string, string>;
-  onQueryChange: (v: string) => void; onFilterChange: (v: TodoStatus) => void;
+  onQueryChange: (v: string) => void; onFilterChange: (v: TodoStatus) => void; onPriorityFilterChange: (v: Todo["priority"] | "all") => void;
   onTodoFormChange: (field: string, value: string) => void; onCreateTodo: (e: FormEvent<HTMLFormElement>) => void;
   onToggle: (id: number, completed: boolean) => void; onEdit: (todo: Todo) => void;
   onDelete: (id: number) => void; onLogout: () => void;
@@ -442,10 +475,22 @@ function DashboardSection({ username, todos, totalCount, query, filter, todoForm
         </div>
 
         <div className="mt-6 grid gap-3">
-          <SearchBar value={query} onChange={onQueryChange} />
+          <div className="grid gap-1.5">
+            <label htmlFor="search-todos" className="text-sm" style={{ color: "var(--text-secondary)" }}>Search todos</label>
+            <input id="search-todos" value={query} onChange={(e) => onQueryChange(e.target.value)}
+              placeholder="Search by title or description"
+              className="rounded-2xl px-4 py-3 outline-none transition placeholder:opacity-40"
+              style={{ background: "var(--bg-card)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+            />
+          </div>
           <div className="flex flex-wrap gap-2">
             {(["all", "pending", "completed"] as TodoStatus[]).map((item) => (
               <FilterChip key={item} active={filter === item} onClick={() => onFilterChange(item)}>{item}</FilterChip>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {(["all", "Low", "Medium", "High"] as const).map((p) => (
+              <FilterChip key={p} active={priorityFilter === p} onClick={() => onPriorityFilterChange(p)}>{p}</FilterChip>
             ))}
           </div>
         </div>
@@ -477,11 +522,15 @@ function DashboardSection({ username, todos, totalCount, query, filter, todoForm
             <p className="text-sm uppercase tracking-[0.2em]" style={{ color: "var(--accent)" }}>Protected workspace</p>
             <h2 className="text-2xl font-semibold" style={{ color: "var(--text-primary)" }}>Your tasks</h2>
           </div>
-          <p className="text-sm" style={{ color: "var(--text-secondary)" }}>{todos.length} of {totalCount} tasks shown</p>
+          <p className="text-sm" style={{ color: "var(--text-secondary)" }}>{todos.length} tasks</p>
         </div>
 
         <div className="grid gap-4">
-          {todos.length === 0 ? (
+          {isLoading ? (
+            <div className="rounded-3xl p-10 text-center text-sm" style={{ color: "var(--text-muted)" }}>
+              <Spinner /> Loading…
+            </div>
+          ) : todos.length === 0 ? (
             <div className="rounded-3xl border-dashed p-10 text-center text-sm"
               style={{ border: "2px dashed var(--border)", color: "var(--text-muted)" }}>
               No todos match the current search or filter.
@@ -560,15 +609,18 @@ function TodoCard({ todo, onToggle, onEdit, onDelete }: {
 
 function EditModal({ todo, onSave, onClose }: {
   todo: Todo;
-  onSave: (updated: Todo) => Record<string, string>;
+  onSave: (updated: Todo) => Promise<Record<string, string>>;
   onClose: () => void;
 }) {
   const [draft, setDraft] = useState({ ...todo });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const errs = onSave(draft);
+    setSaving(true);
+    const errs = await onSave(draft);
+    setSaving(false);
     if (Object.keys(errs).length) setErrors(errs);
   };
 
@@ -595,8 +647,9 @@ function EditModal({ todo, onSave, onClose }: {
             </select>
           </label>
           <div className="flex gap-3 pt-2">
-            <button type="submit" className="flex-1 rounded-2xl px-5 py-3 font-semibold transition hover:opacity-90"
+            <button type="submit" disabled={saving} className="flex-1 flex items-center justify-center gap-2 rounded-2xl px-5 py-3 font-semibold transition hover:opacity-90 disabled:opacity-60"
               style={{ background: "var(--accent)", color: "var(--accent-text)" }}>
+              {saving && <Spinner />}
               Save changes
             </button>
             <button type="button" onClick={onClose} className="flex-1 rounded-2xl px-5 py-3 text-sm transition hover:opacity-80"
@@ -610,7 +663,7 @@ function EditModal({ todo, onSave, onClose }: {
   );
 }
 
-// ─── Shared primitives ────────────────────────────────────────────────────────
+// ─── Primitives ───────────────────────────────────────────────────────────────
 
 function Field({ label, helperText, error, value, onChange, rightElement, ...props }: {
   label: string; helperText?: string; error?: string; value?: string; onChange?: (value: string) => void; rightElement?: ReactNode;
@@ -620,10 +673,7 @@ function Field({ label, helperText, error, value, onChange, rightElement, ...pro
     <div className="grid gap-1.5">
       <label htmlFor={id} className="text-sm" style={{ color: "var(--text-secondary)" }}>{label}</label>
       <div className="relative">
-        <input
-          id={id}
-          value={value}
-          onChange={(e) => onChange?.(e.target.value)}
+        <input id={id} value={value} onChange={(e) => onChange?.(e.target.value)}
           aria-invalid={!!error}
           aria-describedby={error ? `${id}-error` : helperText ? `${id}-hint` : undefined}
           {...props}
@@ -663,19 +713,6 @@ function StatCard({ label, value }: { label: string; value: number }) {
     <div className="min-w-24 rounded-2xl px-4 py-3" style={{ background: "var(--bg-surface)", border: "1px solid var(--border)" }}>
       <div className="text-2xl font-semibold" style={{ color: "var(--text-primary)" }}>{value}</div>
       <div className="text-xs uppercase tracking-[0.18em]" style={{ color: "var(--text-muted)" }}>{label}</div>
-    </div>
-  );
-}
-
-function SearchBar({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  return (
-    <div className="grid gap-1.5">
-      <label htmlFor="search-todos" className="text-sm" style={{ color: "var(--text-secondary)" }}>Search todos</label>
-      <input id="search-todos" value={value} onChange={(e) => onChange(e.target.value)}
-        placeholder="Search by title or description"
-        className="rounded-2xl px-4 py-3 outline-none transition placeholder:opacity-40"
-        style={{ background: "var(--bg-card)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
-      />
     </div>
   );
 }
