@@ -3,8 +3,6 @@ export default function Footer() {
     <footer className="mt-10 w-full" style={{ borderTop: "1px solid var(--border)" }}>
       <div className="mx-auto max-w-7xl px-6 py-10 lg:px-10">
         <div className="grid gap-8 sm:grid-cols-3">
-
-          {/* Brand */}
           <div className="space-y-3">
             <div className="flex items-center gap-2">
               <div
@@ -16,33 +14,31 @@ export default function Footer() {
               <span className="font-bold" style={{ color: "var(--text-primary)" }}>TaskFlow</span>
             </div>
             <p className="text-sm leading-6" style={{ color: "var(--text-muted)" }}>
-              A polished Next.js todo app with secure auth, validation, and a responsive UI.
+              A focused task management app with secure sign-in, todo tracking, and a responsive dashboard.
             </p>
           </div>
 
-          {/* Features */}
           <div className="space-y-3">
             <h4 className="text-sm font-semibold uppercase tracking-wider" style={{ color: "var(--text-primary)" }}>
               Features
             </h4>
             <ul className="space-y-2 text-sm" style={{ color: "var(--text-muted)" }}>
               <li>Secure authentication</li>
-              <li>Task creation &amp; editing</li>
+              <li>Task creation and editing</li>
               <li>Priority management</li>
-              <li>Search &amp; filtering</li>
+              <li>Search and filtering</li>
             </ul>
           </div>
 
-          {/* Tech stack */}
           <div className="space-y-3">
             <h4 className="text-sm font-semibold uppercase tracking-wider" style={{ color: "var(--text-primary)" }}>
               Built with
             </h4>
             <ul className="space-y-2 text-sm" style={{ color: "var(--text-muted)" }}>
-              <li>Next.js 16</li>
-              <li>React 19</li>
-              <li>Tailwind CSS v4</li>
-              <li>TypeScript</li>
+              <li>Secure user authentication</li>
+              <li>Task creation and management</li>
+              <li>Search and filter controls</li>
+              <li>Responsive dashboard interface</li>
             </ul>
           </div>
         </div>
@@ -51,8 +47,8 @@ export default function Footer() {
           className="mt-8 flex flex-col items-center justify-between gap-3 border-t pt-6 text-xs sm:flex-row"
           style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}
         >
-          <span>© {new Date().getFullYear()} TaskFlow. All rights reserved.</span>
-          <span>Built with Next.js &amp; Tailwind CSS</span>
+          <span>Copyright {new Date().getFullYear()} TaskFlow. All rights reserved.</span>
+          <span>Designed for secure sign-in and smooth task management</span>
         </div>
       </div>
     </footer>

@@ -13,12 +13,14 @@ export function useTheme() {
     const isDark = stored ? stored === "dark" : prefersDark;
     setDark(isDark);
     document.documentElement.classList.toggle("dark", isDark);
+    document.documentElement.style.colorScheme = isDark ? "dark" : "light";
   }, []);
 
   const toggle = useCallback(() => {
     setDark((prev) => {
       const next = !prev;
       document.documentElement.classList.toggle("dark", next);
+      document.documentElement.style.colorScheme = next ? "dark" : "light";
       localStorage.setItem("theme", next ? "dark" : "light");
       return next;
     });
