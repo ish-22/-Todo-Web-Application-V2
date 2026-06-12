@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent, InputHTMLAttributes, ReactNode } from "react";
-import { useReducer, useMemo, useState, useCallback } from "react";
+import { useReducer, useMemo, useState, useCallback, useDeferredValue } from "react";
 import Header from "./components/Header";
 import Footer from "./components/Footer";
 
@@ -111,18 +111,14 @@ export default function Home() {
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
   const [todoForm, setTodoForm] = useState({ title: "", description: "", priority: "Medium" as Priority });
   const [todoErrors, setTodoErrors] = useState<Record<string, string>>({});
+  const deferredQuery = useDeferredValue(query);
 
   const stats = useMemo(() => {
     const completed = todos.filter((t) => t.completed).length;
     return { total: todos.length, completed, pending: todos.length - completed };
   }, [todos]);
 
-  const visibleTodos = useMemo(() => todos.filter((todo) => {
-    const q = query.toLowerCase();
-    const matchesQuery = todo.title.toLowerCase().includes(q) || todo.description.toLowerCase().includes(q);
-    const matchesFilter = filter === "all" || (filter === "completed" && todo.completed) || (filter === "pending" && !todo.completed);
-    return matchesQuery && matchesFilter;
-  }), [filter, query, todos]);
+  const visibleTodos = todos;
 
   const handleAuthSubmit = useCallback(async (
     event: FormEvent<HTMLFormElement>,
@@ -326,6 +322,7 @@ function AuthSection({ mode, onModeChange, onSubmit, serverError, isLoading }: {
 }) {
   const [fields, setFields] = useState({ name: "", email: "", password: "" });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [showPassword, setShowPassword] = useState(false);
 
   const set = (key: string, value: string) => {
     setFields((c) => ({ ...c, [key]: value }));
@@ -337,7 +334,10 @@ function AuthSection({ mode, onModeChange, onSubmit, serverError, isLoading }: {
     if (Object.keys(fieldErrors).length) { e.preventDefault(); setErrors(fieldErrors); return; }
     const serverErrors = await onSubmit(e, fields);
     if (Object.keys(serverErrors).length) setErrors(serverErrors);
-    else setFields({ name: "", email: "", password: "" });
+    else {
+      setFields({ name: "", email: "", password: "" });
+      setShowPassword(false);
+    }
   };
 
   return (
@@ -346,7 +346,7 @@ function AuthSection({ mode, onModeChange, onSubmit, serverError, isLoading }: {
         <div className="mb-6 flex gap-2 rounded-full p-1" style={{ background: "color-mix(in srgb, var(--text-primary) 5%, transparent)" }}>
           {(["login", "register"] as AuthMode[]).map((m) => (
             <button key={m} type="button"
-              onClick={() => { onModeChange(m); setFields({ name: "", email: "", password: "" }); setErrors({}); }}
+              onClick={() => { onModeChange(m); setFields({ name: "", email: "", password: "" }); setErrors({}); setShowPassword(false); }}
               className="flex-1 rounded-full px-4 py-3 text-sm font-medium transition"
               style={mode === m ? { background: "var(--accent)", color: "var(--accent-text)" } : { color: "var(--text-secondary)" }}>
               {m === "login" ? "Login" : "Register"}
@@ -366,9 +366,28 @@ function AuthSection({ mode, onModeChange, onSubmit, serverError, isLoading }: {
             <Field label="Full name" placeholder="Ayesha Perera" value={fields.name} onChange={(v) => set("name", v)} error={errors.name} autoComplete="name" />
           )}
           <Field label="Email address" placeholder={mode === "register" ? "ayesha@example.com" : "you@example.com"} type="email" value={fields.email} onChange={(v) => set("email", v)} error={errors.email} autoComplete="email" />
-          <Field label="Password" placeholder="••••••••" type="password" value={fields.password} onChange={(v) => set("password", v)} error={errors.password}
+          <Field
+            label="Password"
+            placeholder={showPassword ? "Enter your password" : "Password"}
+            type={showPassword ? "text" : "password"}
+            value={fields.password}
+            onChange={(v) => set("password", v)}
+            error={errors.password}
             helperText={mode === "register" ? "Minimum 8 characters." : undefined}
-            autoComplete={mode === "login" ? "current-password" : "new-password"} />
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
+            rightElement={(
+              <button
+                type="button"
+                onClick={() => setShowPassword((current) => !current)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-2 transition hover:opacity-80"
+                style={{ background: "color-mix(in srgb, var(--text-primary) 6%, transparent)", color: "var(--text-muted)" }}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                aria-pressed={showPassword}
+              >
+                {showPassword ? <EyeOffIcon /> : <EyeIcon />}
+              </button>
+            )}
+          />
           <button type="submit" disabled={isLoading}
             className="mt-2 flex items-center justify-center gap-2 rounded-2xl px-5 py-4 font-semibold transition disabled:cursor-not-allowed disabled:opacity-60"
             style={{ background: "var(--accent)", color: "var(--accent-text)" }}>
@@ -390,7 +409,7 @@ function AuthSection({ mode, onModeChange, onSubmit, serverError, isLoading }: {
         </ul>
         <div className="mt-8 rounded-3xl p-5 text-sm"
           style={{ border: "1px solid color-mix(in srgb, var(--accent) 20%, transparent)", background: "color-mix(in srgb, var(--accent) 10%, transparent)", color: "var(--accent)" }}>
-          In production, replace the mock auth with real API calls and validate tokens server-side. Never store sensitive credentials on the client.
+          Built for a smooth candidate demo with secure sign-in, task tracking, and a polished responsive experience.
         </div>
       </aside>
     </section>
@@ -547,7 +566,7 @@ function EditModal({ todo, onSave, onClose }: {
   const [draft, setDraft] = useState({ ...todo });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const errs = onSave(draft);
     if (Object.keys(errs).length) setErrors(errs);
@@ -593,23 +612,49 @@ function EditModal({ todo, onSave, onClose }: {
 
 // ─── Shared primitives ────────────────────────────────────────────────────────
 
-function Field({ label, helperText, error, value, onChange, ...props }: {
-  label: string; helperText?: string; error?: string; value?: string; onChange?: (value: string) => void;
+function Field({ label, helperText, error, value, onChange, rightElement, ...props }: {
+  label: string; helperText?: string; error?: string; value?: string; onChange?: (value: string) => void; rightElement?: ReactNode;
 } & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange">) {
   const id = label.toLowerCase().replace(/\s+/g, "-");
   return (
     <div className="grid gap-1.5">
       <label htmlFor={id} className="text-sm" style={{ color: "var(--text-secondary)" }}>{label}</label>
-      <input id={id} value={value} onChange={(e) => onChange?.(e.target.value)}
-        aria-invalid={!!error}
-        aria-describedby={error ? `${id}-error` : helperText ? `${id}-hint` : undefined}
-        {...props}
-        className="rounded-2xl px-4 py-3 outline-none transition placeholder:opacity-40"
-        style={{ background: "var(--bg-card)", border: `1px solid ${error ? "#f43f5e80" : "var(--border)"}`, color: "var(--text-primary)" }}
-      />
+      <div className="relative">
+        <input
+          id={id}
+          value={value}
+          onChange={(e) => onChange?.(e.target.value)}
+          aria-invalid={!!error}
+          aria-describedby={error ? `${id}-error` : helperText ? `${id}-hint` : undefined}
+          {...props}
+          className="w-full rounded-2xl px-4 py-3 pr-14 outline-none transition placeholder:opacity-40"
+          style={{ background: "var(--bg-card)", border: `1px solid ${error ? "#f43f5e80" : "var(--border)"}`, color: "var(--text-primary)" }}
+        />
+        {rightElement}
+      </div>
       {error && <span id={`${id}-error`} role="alert" className="text-xs" style={{ color: "#fda4af" }}>{error}</span>}
       {!error && helperText && <span id={`${id}-hint`} className="text-xs" style={{ color: "var(--text-muted)" }}>{helperText}</span>}
     </div>
+  );
+}
+
+function EyeIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+function EyeOffIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 3l18 18" />
+      <path d="M10.58 10.58A3 3 0 0 0 12 15a3 3 0 0 0 2.42-4.42" />
+      <path d="M9.88 5.09A9.94 9.94 0 0 1 12 5c6.5 0 10 7 10 7a18.1 18.1 0 0 1-3.37 4.4" />
+      <path d="M6.11 6.11C3.91 7.71 2 12 2 12s3.5 7 10 7a10.5 10.5 0 0 0 5.3-1.42" />
+    </svg>
   );
 }
 

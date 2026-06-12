@@ -44,12 +44,14 @@ function useTheme() {
     const isDark = stored ? stored === "dark" : prefersDark;
     setDark(isDark);
     document.documentElement.classList.toggle("dark", isDark);
+    document.documentElement.style.colorScheme = isDark ? "dark" : "light";
   }, []);
 
   const toggle = useCallback(() => {
     setDark((prev) => {
       const next = !prev;
       document.documentElement.classList.toggle("dark", next);
+      document.documentElement.style.colorScheme = next ? "dark" : "light";
       localStorage.setItem("theme", next ? "dark" : "light");
       return next;
     });
@@ -98,31 +100,33 @@ export default function Header({
         </button>
 
         {/* Nav links */}
-        <div className="hidden items-center gap-1 md:flex">
-          {NAV_LINKS.map(({ label, id }) => {
-            const isActive = activeSection === id;
-            return (
-              <button
-                key={id}
-                type="button"
-                onClick={() => scrollTo(id)}
-                className="relative rounded-full px-4 py-2 text-sm font-medium transition"
-                style={{
-                  color: isActive ? "var(--accent)" : "var(--text-secondary)",
-                  opacity: isActive ? 1 : 0.75,
-                }}
-              >
-                {label}
-                {isActive && (
-                  <span
-                    className="absolute bottom-0 left-1/2 h-0.5 w-4 -translate-x-1/2 rounded-full"
-                    style={{ background: "var(--accent)" }}
-                  />
-                )}
-              </button>
-            );
-          })}
-        </div>
+        {isAuthenticated && (
+          <div className="hidden items-center gap-1 md:flex">
+            {NAV_LINKS.map(({ label, id }) => {
+              const isActive = activeSection === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => scrollTo(id)}
+                  className="relative rounded-full px-4 py-2 text-sm font-medium transition"
+                  style={{
+                    color: isActive ? "var(--accent)" : "var(--text-secondary)",
+                    opacity: isActive ? 1 : 0.75,
+                  }}
+                >
+                  {label}
+                  {isActive && (
+                    <span
+                      className="absolute bottom-0 left-1/2 h-0.5 w-4 -translate-x-1/2 rounded-full"
+                      style={{ background: "var(--accent)" }}
+                    />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {/* Right side */}
         <div className="flex items-center gap-3">
